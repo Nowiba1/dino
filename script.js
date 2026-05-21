@@ -1,7 +1,6 @@
-
-import { setupGround,  updateGround  } from "./ground.js"
-import { setupClouds,  updateClouds  } from "./clouds.js"
-import { setupCactus,  updateCactus,  getCactusRects } from "./cactus.js"
+import { setupGround, updateGround } from "./ground.js"
+import { setupClouds, updateClouds } from "./clouds.js"
+import { setupCactus, updateCactus, getCactusRects } from "./cactus.js"
 import { createDinoController, createMpDino } from "./dino.js"
 import { setCustomProperty, getCustomProperty } from "./update.js"
 
@@ -9,6 +8,7 @@ import { setCustomProperty, getCustomProperty } from "./update.js"
 const WORLD_WIDTH     = 100
 const WORLD_HEIGHT    = 30
 const SPEED_SCALE_INC = 0.00001
+const SERVER_URL      = "https://dino-52bx.onrender.com"
 
 // ── Screen elements ──────────────────────────────────────────
 const screens = {
@@ -221,23 +221,70 @@ let myDinoCtrl  = null
 // Prevent repeated obstacle broadcast per tick
 let mpObstaclePrevCount = 0
 
-function ensureSocket() {
+function initializeSocket() {
   if (socket && socket.connected) return
+  
+  socket = io(SERVER_URL)
 
-  // Change const socket = io() to:
-const socket = io("https://dino-52bx.onrender.com");
+  socket.on("connect", () => {
+    console.log("Connected to server with ID:", socket.id)
+  })
 
-  socket.on("playerJoined",     data => { renderLobby(data.players); updateStartBtn(data.players) })
-  socket.on("playerLeft",       onPlayerLeft)
-  socket.on("hostChanged",      onHostChanged)
-  socket.on("gameCountdown",    onGameCountdown)
-  socket.on("gameStart",        onGameStart)
-  socket.on("speedSync",        ({ speedScale, score }) => { mpSpeed = speedScale; mpScoreVal = score; updateMpScoreDisplay(score) })
-  socket.on("playerMoved",      ({ id, bottom, state }) => { if (mpPlayers[id]) { mpPlayers[id].data.bottom = bottom; mpPlayers[id].data.state = state } })
-  socket.on("playerDied",       onPlayerDied)
-  socket.on("playerRespawn",    onPlayerRespawn)
-  socket.on("invincibilityEnd", ({ id }) => { if (mpPlayers[id]) { mpPlayers[id].data.isInvincible = false; if (mpPlayers[id].mpDino) mpPlayers[id].mpDino.setInvincible(false); if (id === socket.id) hideMpMessage() } })
-  socket.on("gameOver",         onGameOver)
+  socket.on("connect_error", (error) => {
+    console.error("Connection error:", error)
+    alert("Failed to connect to game server. Please try again.")
+  })
+
+  socket.on("disconnect", (reason) => {
+    console.log("Disconnected:", reason)
+  })
+
+  socket.on("playerJoined", (data) => { 
+    renderLobby(data.players)
+    updateStartBtn(data.players) 
+  })
+  
+  socket.on("playerLeft", onPlayerLeft)
+  socket.on("hostChanged", onHostChanged)
+  socket.on("gameCountdown", onGameCountdown)
+  socket.on("gameStart", onGameStart)
+  
+  socket.on("speedSync", ({ speedScale, score }) => { 
+    mpSpeed = speedScale
+    mpScoreVal = score
+    updateMpScoreDisplay(score) 
+  })
+  
+  socket.on("playerMoved", ({ id, bottom, state }) => { 
+    if (mpPlayers[id]) { 
+      mpPlayers[id].data.bottom = bottom
+      mpPlayers[id].data.state = state 
+    } 
+  })
+  
+  socket.on("playerDied", onPlayerDied)
+  socket.on("playerRespawn", onPlayerRespawn)
+  
+  socket.on("invincibilityEnd", ({ id }) => { 
+    if (mpPlayers[id]) { 
+      mpPlayers[id].data.isInvincible = false
+      if (mpPlayers[id].mpDino) mpPlayers[id].mpDino.setInvincible(false)
+      if (id === socket.id) hideMpMessage() 
+    } 
+  })
+  
+  socket.on("gameOver", onGameOver)
+}
+
+function disconnectSocket() {
+  if (socket) {
+    socket.removeAllListeners()
+    socket.disconnect()
+    socket = null
+  }
+  isHost = false
+  myPlayer = null
+  myRoomCode = null
 }
 
 // ── Lobby ─────────────────────────────────────────────────────
@@ -288,7 +335,7 @@ function setupMpWorld(players) {
 
   setupGround(mpGround)
   setupClouds(mpCloudsEl)
-  setupCactus(multiWorld)   // <-- pass multiWorld so cactuses go in the right world
+  setupCactus(multiWorld)
 
   list.forEach(p => {
     if (socket && p.id === socket.id) {
@@ -365,7 +412,7 @@ function mpLoop(time) {
       const rect = me.ctrl.getRect()
       const hit  = getCactusRects().some(r => isCollision(r, rect))
       if (hit) {
-        me.data.isInvincible = true   // local flag prevents double-emit
+        me.data.isInvincible = true
         socket.emit("playerHit")
       }
     }
@@ -385,8 +432,8 @@ function mpLoop(time) {
     mpScoreVal += delta * 0.01
     const score = Math.floor(mpScoreVal)
     updateMpScoreDisplay(score)
-    socket.emit("speedUpdate",  { speedScale: mpSpeed, score })
-    socket.emit("scoreUpdate",  { score })
+    socket.emit("speedUpdate", { speedScale: mpSpeed, score })
+    socket.emit("scoreUpdate", { score })
   }
 
   mpRafId = requestAnimationFrame(mpLoop)
@@ -557,7 +604,7 @@ btnSoloBack.addEventListener("click", () => { soloStop(); showScreen("menu") })
 
 // Create Room
 btnCreate.addEventListener("click", () => {
-  ensureSocket()
+  initializeSocket()
   socket.emit("createRoom", (res) => {
     if (!res.ok) return alert("Could not create room: " + (res.error || "unknown error"))
     myPlayer   = res.player
@@ -583,7 +630,7 @@ btnJoinConfirm.addEventListener("click", () => {
   const code = roomCodeInput.value.trim().toUpperCase()
   if (code.length < 4) { joinError.textContent = "Enter a 4-character code."; return }
   joinError.textContent = "Connecting…"
-  ensureSocket()
+  initializeSocket()
   socket.emit("joinRoom", { code }, (res) => {
     if (!res.ok) { joinError.textContent = res.error || "Could not join."; return }
     myPlayer   = res.player
@@ -602,28 +649,24 @@ roomCodeInput.addEventListener("keydown", e => { if (e.key === "Enter") btnJoinC
 btnStart.addEventListener("click", () => { if (isHost) socket.emit("startGame") })
 
 btnLobbyBack.addEventListener("click", () => {
-  if (socket) { socket.disconnect(); socket = null }
-  isHost = false; myPlayer = null; myRoomCode = null
+  disconnectSocket()
   showScreen("menu")
 })
 
 // Multi back
 btnMultiBack.addEventListener("click", () => {
   mpStop()
-  if (socket) { socket.disconnect(); socket = null }
-  isHost = false; myPlayer = null; myRoomCode = null
+  disconnectSocket()
   showScreen("menu")
 })
 
 // Game over
 btnPlayAgain.addEventListener("click", () => {
-  if (socket) { socket.disconnect(); socket = null }
-  isHost = false; myPlayer = null; myRoomCode = null
+  disconnectSocket()
   showScreen("menu")
 })
 btnGoMenu.addEventListener("click", () => {
-  if (socket) { socket.disconnect(); socket = null }
-  isHost = false; myPlayer = null; myRoomCode = null
+  disconnectSocket()
   showScreen("menu")
 })
 
