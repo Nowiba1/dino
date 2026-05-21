@@ -6,25 +6,24 @@ const path = require("path")
 const app = express()
 const server = http.createServer(app)
 const io = new Server(server, {
-const io = new Server(server, {
   cors: { 
-    origin: ["https://nowiba1.github.io", "http://localhost:3000"], 
+    origin: ["https://nowiba1.github.io", "http://localhost:3000", "http://localhost:5500", "http://127.0.0.1:5500"], 
     methods: ["GET", "POST"] 
   }
-});
+})
 
-// Line 17-20: Ensure the path is correct
-app.use(express.static(path.join(__dirname, ".")));
+app.use(express.static(path.join(__dirname, ".")))
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
-});
+  res.sendFile(path.join(__dirname, "index.html"))
+})
+
 // ── Room State ────────────────────────────────────────────────────────────────
 const rooms = {}
 
-const PLAYER_COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#f1c40f"] // R G B Y
+const PLAYER_COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#f1c40f"]
 const PLAYER_NAMES  = ["Red Rex", "Blue Rex", "Green Rex", "Yellow Rex"]
-const X_OFFSETS     = [8, 16, 24, 32] // % from left, staggered so dinos don't overlap
+const X_OFFSETS     = [8, 16, 24, 32]
 
 function generateRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -40,11 +39,11 @@ function createRoom(hostId) {
   rooms[code] = {
     code,
     hostId,
-    state: "lobby",   // lobby | countdown | playing | ended
+    state: "lobby",
     speedScale: 1,
     score: 0,
     players: {},
-    obstacleQueue: [], // host pushes obstacles here; server broadcasts
+    cactusList: [] // Host will send cactus positions
   }
   return rooms[code]
 }
@@ -62,9 +61,9 @@ function addPlayer(room, socketId) {
     lives: 3,
     isAlive: true,
     isInvincible: false,
-    bottom: 0,         // vertical position (% world height)
-    state: "run",      // run | jump | duck | dead | spectate | spawning
-    spawnAnim: null,   // jetpack | parachute | pterodactyl
+    bottom: 0,
+    state: "run",
+    spawnAnim: null,
     score: 0,
   }
   return room.players[socketId]
@@ -92,7 +91,7 @@ function roomPlayerList(room) {
 
 // ── Socket Events ─────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
-  console.log("connect", socket.id)
+  console.log("Player connected:", socket.id)
 
   // ── Create Room ──
   socket.on("createRoom", (cb) => {
@@ -114,7 +113,6 @@ io.on("connection", (socket) => {
     socket.join(room.code)
     cb({ ok: true, code: room.code, player, players: roomPlayerList(room) })
 
-    // Tell everyone else a new player joined
     socket.to(room.code).emit("playerJoined", { players: roomPlayerList(room) })
     console.log(`${socket.id} joined room ${room.code}`)
   })
@@ -128,6 +126,7 @@ io.on("connection", (socket) => {
     room.state = "countdown"
     room.score = 0
     room.speedScale = 1
+    room.cactusList = []
 
     // Reset all players
     Object.values(room.players).forEach(p => {
@@ -150,32 +149,40 @@ io.on("connection", (socket) => {
     }, 3000)
   })
 
-  // ── Host broadcasts obstacle ──
-  socket.on("spawnObstacle", ({ obstacle }) => {
+  // ── Host syncs cactus positions ──
+  socket.on("syncCactus", ({ cactusPositions }) => {
     const room = getRoomOfSocket(socket.id)
     if (!room || room.hostId !== socket.id || room.state !== "playing") return
-    // Relay to all clients in room (including host)
-    io.to(room.code).emit("obstacleSpawned", { obstacle })
+    room.cactusList = cactusPositions
+    // Send to all OTHER players (not back to host)
+    socket.to(room.code).emit("cactusUpdate", { cactusPositions })
   })
 
-  // ── Host updates speed ──
+  // ── Host updates speed and score ──
   socket.on("speedUpdate", ({ speedScale, score }) => {
     const room = getRoomOfSocket(socket.id)
     if (!room || room.hostId !== socket.id) return
     room.speedScale = speedScale
     room.score = score
-    socket.to(room.code).emit("speedSync", { speedScale, score })
+    // Send to all players INCLUDING host so HUD stays synced
+    io.to(room.code).emit("speedSync", { speedScale, score })
   })
 
   // ── Player position update ──
-  socket.on("positionUpdate", ({ bottom, state }) => {
+  socket.on("positionUpdate", ({ bottom, state, xOffset }) => {
     const room = getRoomOfSocket(socket.id)
     if (!room) return
     const p = room.players[socket.id]
     if (!p) return
     p.bottom = bottom
     p.state = state
-    socket.to(room.code).emit("playerMoved", { id: socket.id, bottom, state })
+    // Broadcast to all OTHER players
+    socket.to(room.code).emit("playerMoved", { 
+      id: socket.id, 
+      bottom, 
+      state,
+      xOffset: p.xOffset 
+    })
   })
 
   // ── Player hit obstacle ──
@@ -190,14 +197,20 @@ io.on("connection", (socket) => {
     if (p.lives <= 0) {
       p.isAlive = false
       p.state = "spectate"
-      io.to(room.code).emit("playerDied", { id: socket.id, players: roomPlayerList(room) })
+      io.to(room.code).emit("playerDied", { 
+        id: socket.id, 
+        players: roomPlayerList(room) 
+      })
 
       // Check if all dead
       const alive = Object.values(room.players).filter(x => x.isAlive)
       if (alive.length === 0) {
         room.state = "ended"
         const sorted = Object.values(room.players).sort((a, b) => b.score - a.score)
-        io.to(room.code).emit("gameOver", { players: roomPlayerList(room), winner: sorted[0]?.id || null })
+        io.to(room.code).emit("gameOver", { 
+          players: roomPlayerList(room), 
+          winner: sorted[0]?.id || null 
+        })
       }
     } else {
       // Pick random respawn animation
@@ -205,6 +218,8 @@ io.on("connection", (socket) => {
       p.spawnAnim = anims[Math.floor(Math.random() * anims.length)]
       p.isInvincible = true
       p.state = "spawning"
+      p.bottom = 0 // Reset position on respawn
+      
       io.to(room.code).emit("playerRespawn", {
         id: socket.id,
         lives: p.lives,
@@ -212,13 +227,16 @@ io.on("connection", (socket) => {
         players: roomPlayerList(room)
       })
 
-      // Remove invincibility after 3s + anim time (~2s)
+      // Remove invincibility after 5 seconds
       setTimeout(() => {
         if (!rooms[room.code] || !room.players[socket.id]) return
-        p.isInvincible = false
-        p.spawnAnim = null
-        p.state = "run"
-        io.to(room.code).emit("invincibilityEnd", { id: socket.id })
+        const player = room.players[socket.id]
+        if (player) {
+          player.isInvincible = false
+          player.spawnAnim = null
+          player.state = "run"
+          io.to(room.code).emit("invincibilityEnd", { id: socket.id })
+        }
       }, 5000)
     }
   })
@@ -233,12 +251,15 @@ io.on("connection", (socket) => {
 
   // ── Disconnect ──
   socket.on("disconnect", () => {
-    console.log("disconnect", socket.id)
+    console.log("Player disconnected:", socket.id)
     const room = getRoomOfSocket(socket.id)
     if (!room) return
 
     delete room.players[socket.id]
-    socket.to(room.code).emit("playerLeft", { id: socket.id, players: roomPlayerList(room) })
+    socket.to(room.code).emit("playerLeft", { 
+      id: socket.id, 
+      players: roomPlayerList(room) 
+    })
 
     // If host left, assign new host or clean up
     if (room.hostId === socket.id) {
