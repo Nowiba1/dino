@@ -224,7 +224,8 @@ let mpObstaclePrevCount = 0
 function ensureSocket() {
   if (socket && socket.connected) return
 
-  socket = io()
+  // Change const socket = io() to:
+const socket = io("https://dino-52bx.onrender.com");
 
   socket.on("playerJoined",     data => { renderLobby(data.players); updateStartBtn(data.players) })
   socket.on("playerLeft",       onPlayerLeft)
