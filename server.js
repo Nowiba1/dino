@@ -15,7 +15,9 @@ const io = new Server(server, {
       "http://127.0.0.1:3000"
     ], 
     methods: ["GET", "POST"] 
-  }
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000
 })
 
 app.use(express.static(path.join(__dirname, ".")))
@@ -23,8 +25,10 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"))
 })
 
-// ── Room State ────────────────────────────────────────────────────────────────
+// ── Room State ─────────────────────────────────────────────────
 const rooms = {}
+const playerKeyMap = {}       // playerKey → { roomCode, socketId }
+const disconnectTimers = {}   // playerKey → timeout
 
 const PLAYER_COLORS = ["#e74c3c", "#3498db", "#2ecc71", "#f1c40f"]
 const PLAYER_NAMES  = ["Red Rex", "Blue Rex", "Green Rex", "Yellow Rex"]
@@ -47,19 +51,20 @@ function createRoom(hostId) {
     state: "lobby",
     speedScale: 1,
     score: 0,
-    players: {},
+    players: {},        // playerKey → playerData
     cactusList: [],
-    cactusSeed: Math.floor(Math.random() * 1000000)  // FIX: Random seed for deterministic generation
+    cactusSeed: Math.floor(Math.random() * 1000000)
   }
   return rooms[code]
 }
 
-function addPlayer(room, socketId) {
+function addPlayer(room, playerKey, socketId) {
   const idx = Object.keys(room.players).length
   if (idx >= 4) return null
 
-  room.players[socketId] = {
-    id: socketId,
+  room.players[playerKey] = {
+    playerKey,
+    socketId,            // current socket ID
     index: idx,
     color: PLAYER_COLORS[idx],
     name: PLAYER_NAMES[idx],
@@ -72,16 +77,37 @@ function addPlayer(room, socketId) {
     spawnAnim: null,
     score: 0,
   }
-  return room.players[socketId]
+  playerKeyMap[playerKey] = { roomCode: room.code, socketId }
+  return room.players[playerKey]
 }
 
 function getRoomOfSocket(socketId) {
-  return Object.values(rooms).find(r => r.players[socketId])
+  // Search all rooms for a player with this socketId
+  for (const code in rooms) {
+    const room = rooms[code]
+    for (const key in room.players) {
+      if (room.players[key].socketId === socketId) {
+        return room
+      }
+    }
+  }
+  return null
+}
+
+function getPlayerInRoom(socketId) {
+  const room = getRoomOfSocket(socketId)
+  if (!room) return null
+  for (const key in room.players) {
+    if (room.players[key].socketId === socketId) {
+      return { room, player: room.players[key], playerKey: key }
+    }
+  }
+  return null
 }
 
 function roomPlayerList(room) {
   return Object.values(room.players).map(p => ({
-    id: p.id,
+    id: p.playerKey,          // use playerKey as public ID
     index: p.index,
     color: p.color,
     name: p.name,
@@ -95,38 +121,85 @@ function roomPlayerList(room) {
   }))
 }
 
-// ── Socket Events ─────────────────────────────────────────────────────────────
+// ── Socket Events ─────────────────────────────────────────────
 io.on("connection", (socket) => {
-  console.log("Player connected:", socket.id)
+  console.log("Socket connected:", socket.id)
+
+  // ── Registration / Reconnection ──
+  socket.on("register", ({ playerKey, roomCode }, callback) => {
+    // If reconnecting to an existing room
+    if (roomCode && rooms[roomCode]) {
+      const room = rooms[roomCode]
+      // Cancel any pending disconnect timer for this playerKey
+      if (disconnectTimers[playerKey]) {
+        clearTimeout(disconnectTimers[playerKey])
+        delete disconnectTimers[playerKey]
+      }
+      
+      const player = room.players[playerKey]
+      if (player) {
+        // Reconnect: update socketId
+        player.socketId = socket.id
+        playerKeyMap[playerKey] = { roomCode, socketId: socket.id }
+        socket.join(roomCode)
+        
+        // Notify others that the player is back
+        socket.to(roomCode).emit("playerReconnected", { 
+          playerKey, 
+          players: roomPlayerList(room) 
+        })
+        
+        callback({ 
+          success: true, 
+          player, 
+          players: roomPlayerList(room),
+          roomState: {
+            state: room.state,
+            speedScale: room.speedScale,
+            score: room.score,
+            cactusSeed: room.cactusSeed
+          }
+        })
+        console.log(`Player ${playerKey} reconnected via socket ${socket.id}`)
+        return
+      }
+    }
+    // New registration: just acknowledge
+    callback({ success: true, newPlayer: true })
+  })
 
   // ── Create Room ──
-  socket.on("createRoom", (cb) => {
+  socket.on("createRoom", ({ playerKey }, cb) => {
     const room = createRoom(socket.id)
-    const player = addPlayer(room, socket.id)
+    const player = addPlayer(room, playerKey, socket.id)
+    if (!player) return cb({ ok: false, error: "Room full" })
     socket.join(room.code)
     cb({ ok: true, code: room.code, player, players: roomPlayerList(room) })
-    console.log(`Room ${room.code} created by ${socket.id}`)
+    console.log(`Room ${room.code} created by ${socket.id} (playerKey: ${playerKey})`)
   })
 
   // ── Join Room ──
-  socket.on("joinRoom", ({ code }, cb) => {
+  socket.on("joinRoom", ({ code, playerKey }, cb) => {
     const room = rooms[code.toUpperCase()]
     if (!room) return cb({ ok: false, error: "Room not found" })
     if (room.state !== "lobby") return cb({ ok: false, error: "Game already started" })
     if (Object.keys(room.players).length >= 4) return cb({ ok: false, error: "Room is full" })
 
-    const player = addPlayer(room, socket.id)
+    const player = addPlayer(room, playerKey, socket.id)
+    if (!player) return cb({ ok: false, error: "Could not join" })
     socket.join(room.code)
     cb({ ok: true, code: room.code, player, players: roomPlayerList(room) })
 
     socket.to(room.code).emit("playerJoined", { players: roomPlayerList(room) })
-    console.log(`${socket.id} joined room ${room.code}`)
+    console.log(`${socket.id} (playerKey: ${playerKey}) joined room ${room.code}`)
   })
 
   // ── Host starts the game ──
   socket.on("startGame", () => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room || room.hostId !== socket.id) return
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    const room = data.room
+    if (room.hostId !== socket.id) return
     if (Object.keys(room.players).length < 1) return
 
     room.state = "countdown"
@@ -135,7 +208,6 @@ io.on("connection", (socket) => {
     room.cactusList = []
     room.cactusSeed = Math.floor(Math.random() * 1000000)
 
-    // Reset all players
     Object.values(room.players).forEach(p => {
       p.lives = 3
       p.isAlive = true
@@ -148,11 +220,9 @@ io.on("connection", (socket) => {
 
     io.to(room.code).emit("gameCountdown", { players: roomPlayerList(room) })
 
-    // After 3s countdown → start
     setTimeout(() => {
       if (!rooms[room.code]) return
       room.state = "playing"
-      // FIX: Include cactus seed in game start so non-host can generate obstacles
       io.to(room.code).emit("gameStart", { 
         players: roomPlayerList(room),
         cactusSeed: room.cactusSeed
@@ -162,144 +232,157 @@ io.on("connection", (socket) => {
 
   // ── Host syncs cactus positions ──
   socket.on("syncCactus", ({ cactusPositions }) => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room || room.hostId !== socket.id || room.state !== "playing") return
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    const room = data.room
+    if (room.hostId !== socket.id || room.state !== "playing") return
     room.cactusList = cactusPositions
-    // Send to all OTHER players (not back to host)
     socket.to(room.code).emit("cactusUpdate", { cactusPositions })
   })
 
-  // ── Host broadcasts game state for non-host simulation ──
+  // ── Host broadcasts game state ──
   socket.on("gameStateBroadcast", ({ speedScale, score, cactusSeed }) => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room || room.hostId !== socket.id) return
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    const room = data.room
+    if (room.hostId !== socket.id) return
     room.speedScale = speedScale
     room.score = score
     room.cactusSeed = cactusSeed
-    // FIX: Broadcast to all OTHER players for local simulation
     socket.to(room.code).emit("gameStateSync", { speedScale, score, cactusSeed })
   })
 
-  // ── Host updates speed and score ──
+  // ── Host speed update ──
   socket.on("speedUpdate", ({ speedScale, score }) => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room || room.hostId !== socket.id) return
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    const room = data.room
+    if (room.hostId !== socket.id) return
     room.speedScale = speedScale
     room.score = score
-    // FIX: Use io.to() to include ALL players (including host) for HUD sync
-    // Note: Inside socket.on, io.to() emits to all sockets in room including sender
     io.to(room.code).emit("speedSync", { speedScale, score })
   })
 
-  // ── Player position update ──
+  // ── Player position ──
   socket.on("positionUpdate", ({ bottom, state, xOffset }) => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room) return
-    const p = room.players[socket.id]
-    if (!p) return
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    const p = data.player
     p.bottom = bottom
     p.state = state
-    // Broadcast to all OTHER players
-    socket.to(room.code).emit("playerMoved", { 
-      id: socket.id, 
+    socket.to(data.room.code).emit("playerMoved", { 
+      id: data.playerKey, 
       bottom, 
       state,
       xOffset: p.xOffset 
     })
   })
 
-  // ── Player hit obstacle ──
+  // ── Player hit ──
   socket.on("playerHit", () => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room) return
-    const p = room.players[socket.id]
-    if (!p || !p.isAlive || p.isInvincible) return
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    const p = data.player
+    if (!p.isAlive || p.isInvincible) return
 
     p.lives--
 
     if (p.lives <= 0) {
       p.isAlive = false
       p.state = "spectate"
-      io.to(room.code).emit("playerDied", { 
-        id: socket.id, 
-        players: roomPlayerList(room) 
+      io.to(data.room.code).emit("playerDied", { 
+        id: data.playerKey, 
+        players: roomPlayerList(data.room) 
       })
 
-      // Check if all dead
-      const alive = Object.values(room.players).filter(x => x.isAlive)
+      const alive = Object.values(data.room.players).filter(x => x.isAlive)
       if (alive.length === 0) {
-        room.state = "ended"
-        const sorted = Object.values(room.players).sort((a, b) => b.score - a.score)
-        io.to(room.code).emit("gameOver", { 
-          players: roomPlayerList(room), 
-          winner: sorted[0]?.id || null 
+        data.room.state = "ended"
+        const sorted = Object.values(data.room.players).sort((a, b) => b.score - a.score)
+        io.to(data.room.code).emit("gameOver", { 
+          players: roomPlayerList(data.room), 
+          winner: sorted[0]?.playerKey || null 
         })
       }
     } else {
-      // Pick random respawn animation
       const anims = ["jetpack", "parachute", "pterodactyl"]
       p.spawnAnim = anims[Math.floor(Math.random() * anims.length)]
       p.isInvincible = true
       p.state = "spawning"
-      p.bottom = 0 // Reset position on respawn
+      p.bottom = 0
       
-      io.to(room.code).emit("playerRespawn", {
-        id: socket.id,
+      io.to(data.room.code).emit("playerRespawn", {
+        id: data.playerKey,
         lives: p.lives,
         spawnAnim: p.spawnAnim,
-        players: roomPlayerList(room)
+        players: roomPlayerList(data.room)
       })
 
-      // Remove invincibility after 5 seconds
       setTimeout(() => {
-        if (!rooms[room.code] || !room.players[socket.id]) return
-        const player = room.players[socket.id]
-        if (player) {
-          player.isInvincible = false
-          player.spawnAnim = null
-          player.state = "run"
-          io.to(room.code).emit("invincibilityEnd", { id: socket.id })
-        }
+        if (!rooms[data.room.code] || !data.room.players[data.playerKey]) return
+        const player = data.room.players[data.playerKey]
+        player.isInvincible = false
+        player.spawnAnim = null
+        player.state = "run"
+        io.to(data.room.code).emit("invincibilityEnd", { id: data.playerKey })
       }, 5000)
     }
   })
 
-  // ── Player score update ──
+  // ── Score update ──
   socket.on("scoreUpdate", ({ score }) => {
-    const room = getRoomOfSocket(socket.id)
-    if (!room) return
-    const p = room.players[socket.id]
-    if (p) p.score = score
+    const data = getPlayerInRoom(socket.id)
+    if (!data) return
+    data.player.score = score
   })
 
   // ── Disconnect ──
   socket.on("disconnect", () => {
-    console.log("Player disconnected:", socket.id)
-    const room = getRoomOfSocket(socket.id)
-    if (!room) return
-
-    delete room.players[socket.id]
-    socket.to(room.code).emit("playerLeft", { 
-      id: socket.id, 
-      players: roomPlayerList(room) 
-    })
-
-    // If host left, assign new host or clean up
-    if (room.hostId === socket.id) {
-      const remaining = Object.keys(room.players)
-      if (remaining.length > 0) {
-        room.hostId = remaining[0]
-        io.to(room.code).emit("hostChanged", { newHostId: room.hostId })
-      } else {
-        delete rooms[room.code]
-        console.log(`Room ${room.code} deleted`)
+    console.log("Socket disconnected:", socket.id)
+    // Find player by socketId
+    let found = null
+    for (const code in rooms) {
+      const room = rooms[code]
+      for (const key in room.players) {
+        if (room.players[key].socketId === socket.id) {
+          found = { room, playerKey: key }
+          break
+        }
       }
+      if (found) break
     }
+    if (!found) return
 
-    // Clean empty room
-    if (Object.keys(room.players).length === 0 && rooms[room.code]) {
-      delete rooms[room.code]
-    }
+    const { room, playerKey } = found
+    // Don't remove the player immediately; set a 15-second timer
+    disconnectTimers[playerKey] = setTimeout(() => {
+      // After timeout, remove player if still disconnected
+      if (room.players[playerKey] && room.players[playerKey].socketId === socket.id) {
+        delete room.players[playerKey]
+        delete playerKeyMap[playerKey]
+        io.to(room.code).emit("playerLeft", { 
+          id: playerKey, 
+          players: roomPlayerList(room) 
+        })
+
+        // If host left, assign new host or clean up
+        if (room.hostId === socket.id) {
+          const remaining = Object.keys(room.players)
+          if (remaining.length > 0) {
+            room.hostId = room.players[remaining[0]].socketId
+            io.to(room.code).emit("hostChanged", { newHostId: room.hostId })
+          } else {
+            delete rooms[room.code]
+            console.log(`Room ${room.code} deleted`)
+          }
+        }
+
+        if (Object.keys(room.players).length === 0 && rooms[room.code]) {
+          delete rooms[room.code]
+        }
+      }
+      delete disconnectTimers[playerKey]
+    }, 15000)
   })
 })
 
