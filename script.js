@@ -76,7 +76,7 @@ scaleWorld(soloWorld)
 scaleWorld(multiWorld)
 
 // ════════════════════════════════════════════════════════════
-//  SOLO MODE
+//  SOLO MODE (unchanged – already fixed)
 // ════════════════════════════════════════════════════════════
 let soloRunning  = false
 let soloLastTime = null
@@ -221,9 +221,9 @@ let mpCloudsEl  = null
 let myDinoElem  = null
 let myDinoCtrl  = null
 let lastCactusSync = 0
-let playerKey   = null      // persistent key for reconnection
+let playerKey   = null
 
-// Generate or retrieve a persistent player key
+// ── Persistent player key (survives page reloads) ────────────
 function getPlayerKey() {
   let key = sessionStorage.getItem("dinoPartyPlayerKey")
   if (!key) {
@@ -233,6 +233,7 @@ function getPlayerKey() {
   return key
 }
 
+// ── Socket initialization & reconnection ──────────────────────
 function initializeSocket(roomCode = null) {
   if (socket && socket.connected) return Promise.resolve()
   return new Promise((resolve) => {
@@ -245,32 +246,37 @@ function initializeSocket(roomCode = null) {
 
     socket.on("connect", () => {
       console.log("Connected:", socket.id)
-      // Register/reconnect
+      // Always register with persistent key
       socket.emit("register", { playerKey: getPlayerKey(), roomCode }, (res) => {
-        if (res && res.success) {
-          if (res.newPlayer) {
-            // New registration
-          } else {
-            // Reconnected! Restore state
-            console.log("Reconnected, restoring state...")
-            myPlayer = res.player
-            myRoomCode = roomCode
-            isHost = (res.roomState && res.roomState.hostId === socket.id) // will be updated later
-            // Rebuild mpPlayers from the players list
-            const list = res.players || []
-            rebuildMpPlayers(list)
-            if (res.roomState) {
-              mpSpeed = res.roomState.speedScale || 1
-              mpScoreVal = res.roomState.score || 0
-              updateMpScoreDisplay(mpScoreVal)
-              if (res.roomState.state === "playing") {
-                mpRunning = true
-                mpLastTime = null
-                if (mpRafId) cancelAnimationFrame(mpRafId)
-                mpRafId = requestAnimationFrame(mpLoop)
-              }
-            }
-          }
+        if (!res || !res.success) return resolve()
+        if (res.newPlayer) {
+          // First registration, nothing else to do
+          resolve()
+          return
+        }
+        // Reconnection: restore full game state
+        console.log("Reconnected – restoring state...")
+        myPlayer   = res.player
+        myRoomCode = roomCode
+        isHost     = (res.roomState?.hostId === socket.id)   // may be updated later via hostChanged
+        const playersList = res.players || []
+        
+        // Rebuild the world if the game is running
+        if (res.roomState?.state === "playing") {
+          showScreen("multi")
+          scaleWorld(multiWorld)
+          setupMpWorld(playersList)
+          mpRunning   = true
+          mpLastTime  = null
+          mpSpeed     = res.roomState.speedScale || 1
+          mpScoreVal  = res.roomState.score || 0
+          updateMpScoreDisplay(mpScoreVal)
+          if (mpRafId) cancelAnimationFrame(mpRafId)
+          mpRafId = requestAnimationFrame(mpLoop)
+        } else {
+          // Lobby or countdown – just update the lobby display
+          renderLobby(playersList)
+          updateStartBtn(playersList)
         }
         resolve()
       })
@@ -287,8 +293,9 @@ function initializeSocket(roomCode = null) {
     socket.on("playerJoined", (data) => { renderLobby(data.players); updateStartBtn(data.players) })
     socket.on("playerLeft", onPlayerLeft)
     socket.on("playerReconnected", (data) => {
-      // A player came back
-      rebuildMpPlayers(data.players)
+      // Another player reconnected, update their representation
+      const list = data.players || []
+      rebuildRemotePlayers(list)
     })
     socket.on("hostChanged", onHostChanged)
     socket.on("gameCountdown", onGameCountdown)
@@ -302,7 +309,6 @@ function initializeSocket(roomCode = null) {
     socket.on("gameStateSync", ({ speedScale, score, cactusSeed }) => {
       mpSpeed = speedScale
       mpScoreVal = score
-      mpCactusSeed = cactusSeed
       updateMpScoreDisplay(score)
     })
     socket.on("playerMoved", ({ id, bottom, state, xOffset }) => {
@@ -328,37 +334,21 @@ function initializeSocket(roomCode = null) {
   })
 }
 
-function rebuildMpPlayers(playersList) {
-  // Update mpPlayers with current data, preserving local references
-  const newMap = {}
+// ── Rebuild remote players after reconnection ──────────────────
+function rebuildRemotePlayers(playersList) {
   playersList.forEach(p => {
-    const existing = mpPlayers[p.id]
-    if (existing) {
-      newMap[p.id] = existing
-      newMap[p.id].data = { ...p }
-    } else if (p.id === playerKey) {
-      // It's me! Create my own entry
-      newMap[p.id] = {
-        data: { ...p },
-        ctrl: myDinoCtrl,
-        isMine: true
-      }
+    if (p.id === playerKey) return  // skip self
+    if (mpPlayers[p.id]) {
+      // Update data only
+      mpPlayers[p.id].data = { ...p, ...mpPlayers[p.id].data, id: p.id }
     } else {
-      // New remote player
       const mpDino = createMpDino(multiWorld, p)
-      newMap[p.id] = { data: { ...p }, mpDino, isMine: false }
+      mpPlayers[p.id] = { data: { ...p }, mpDino, isMine: false }
     }
   })
-  // Remove entries no longer present
-  for (const id in mpPlayers) {
-    if (!newMap[id] && mpPlayers[id].mpDino) {
-      mpPlayers[id].mpDino.remove()
-    }
-  }
-  mpPlayers = newMap
-  if (mpHud) buildMpHud(Object.values(newMap).map(e => e.data))
 }
 
+// ── Sync remote cacti ──────────────────────────────────────────
 function syncRemoteCacti(positions) {
   const existingCacti = [...multiWorld.querySelectorAll(".remote-cactus")]
   while (existingCacti.length > positions.length) {
@@ -422,10 +412,11 @@ function updateStartBtn(players) {
   }
 }
 
-// ── MP world setup ────────────────────────────────────────────
+// ── MP world setup (called on countdown and reconnection) ──────
 function setupMpWorld(players) {
   const list = Array.isArray(players) ? players : Object.values(players)
 
+  // Clean everything
   multiWorld.querySelectorAll(".mp-dino, [data-mp-dino], [data-cactus], .remote-cactus").forEach(e => e.remove())
   if (myDinoElem) { myDinoElem.remove(); myDinoElem = null }
   myDinoCtrl = null
@@ -436,13 +427,14 @@ function setupMpWorld(players) {
 
   setupGround(mpGround)
   setupClouds(mpCloudsEl)
-  
+
   if (isHost) {
     setupCactus(multiWorld)
   }
 
   list.forEach(p => {
     if (p.id === playerKey) {
+      // My own dino
       myDinoElem = document.createElement("img")
       myDinoElem.src = "images/dino-stationary.png"
       myDinoElem.classList.add("dino")
@@ -539,14 +531,14 @@ function mpLoop(time) {
     mpScoreVal += delta * 0.01
     const score = Math.floor(mpScoreVal)
     updateMpScoreDisplay(score)
-    
+
     if (time - lastCactusSync > 80) {
       lastCactusSync = time
       const cactusElements = multiWorld.querySelectorAll("[data-cactus]:not(.remote-cactus)")
       const positions = [...cactusElements].map(c => getCustomProperty(c, "--left"))
       socket.emit("syncCactus", { cactusPositions: positions })
     }
-    
+
     socket.emit("speedUpdate", { speedScale: mpSpeed, score })
     socket.emit("scoreUpdate", { score })
     socket.emit("gameStateBroadcast", { speedScale: mpSpeed, score, cactusSeed: 0 })
@@ -584,7 +576,7 @@ function onPlayerLeft({ id, players }) {
 
 function onHostChanged({ newHostId }) {
   if (socket && newHostId === socket.id) {
-    isHost = true
+    isHost                     = true
     btnStart.style.display     = "block"
     lobbyWaiting.style.display = "none"
   }
@@ -617,6 +609,7 @@ function onGameCountdown({ players }) {
 
 function onGameStart({ players, cactusSeed }) {
   const list = Array.isArray(players) ? players : Object.values(players)
+  // Update player data without destroying local controllers / elements
   list.forEach(p => {
     if (mpPlayers[p.id]) {
       mpPlayers[p.id].data = { ...p, ctrl: mpPlayers[p.id].ctrl, mpDino: mpPlayers[p.id].mpDino, isMine: mpPlayers[p.id].isMine }
@@ -724,11 +717,9 @@ function colorFilter(hex) {
 //  BUTTON WIRING
 // ════════════════════════════════════════════════════════════
 
-// Solo
 btnSolo.addEventListener("click", () => { showScreen("solo"); soloInit() })
 btnSoloBack.addEventListener("click", () => { soloStop(); showScreen("menu") })
 
-// Create Room
 btnCreate.addEventListener("click", async () => {
   playerKey = getPlayerKey()
   await initializeSocket()
@@ -745,7 +736,6 @@ btnCreate.addEventListener("click", async () => {
   })
 })
 
-// Join Room
 btnJoinOpen.addEventListener("click", () => {
   joinError.textContent = ""
   roomCodeInput.value   = ""
@@ -773,29 +763,10 @@ btnJoinConfirm.addEventListener("click", async () => {
 })
 roomCodeInput.addEventListener("keydown", e => { if (e.key === "Enter") btnJoinConfirm.click() })
 
-// Lobby
 btnStart.addEventListener("click", () => { if (isHost && socket) socket.emit("startGame") })
-btnLobbyBack.addEventListener("click", () => {
-  disconnectSocket()
-  showScreen("menu")
-})
+btnLobbyBack.addEventListener("click", () => { disconnectSocket(); showScreen("menu") })
+btnMultiBack.addEventListener("click", () => { mpStop(); disconnectSocket(); showScreen("menu") })
+btnPlayAgain.addEventListener("click", () => { disconnectSocket(); showScreen("menu") })
+btnGoMenu.addEventListener("click", () => { disconnectSocket(); showScreen("menu") })
 
-// Multi back
-btnMultiBack.addEventListener("click", () => {
-  mpStop()
-  disconnectSocket()
-  showScreen("menu")
-})
-
-// Game over
-btnPlayAgain.addEventListener("click", () => {
-  disconnectSocket()
-  showScreen("menu")
-})
-btnGoMenu.addEventListener("click", () => {
-  disconnectSocket()
-  showScreen("menu")
-})
-
-// ── Boot ──────────────────────────────────────────────────────
 showScreen("menu")
