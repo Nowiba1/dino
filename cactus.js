@@ -10,7 +10,6 @@ const CACTUS_INTERVAL_MAX = 2000
 
 // Active world context — switched between solo and multiplayer
 let activeWorld = null
-
 let nextCactusTime
 
 /**
@@ -21,12 +20,16 @@ let nextCactusTime
 export function setupCactus(worldElem) {
   activeWorld    = worldElem || document.querySelector("[data-world]")
   nextCactusTime = CACTUS_INTERVAL_MIN
-  // Remove all existing cactus elements across the whole document
-  document.querySelectorAll("[data-cactus]").forEach(c => c.remove())
+  // FIX: Only remove cactus elements within the active world, not globally
+  if (activeWorld) {
+    activeWorld.querySelectorAll("[data-cactus]").forEach(c => c.remove())
+  }
 }
 
 export function updateCactus(delta, speedScale) {
-  document.querySelectorAll("[data-cactus]").forEach(cactus => {
+  // FIX: Only operate on cacti within the active world
+  const world = activeWorld || document
+  world.querySelectorAll("[data-cactus]").forEach(cactus => {
     incrementCustomProperty(cactus, "--left", delta * speedScale * SPEED * -1)
     if (getCustomProperty(cactus, "--left") <= -100) {
       cactus.remove()
@@ -41,8 +44,10 @@ export function updateCactus(delta, speedScale) {
   nextCactusTime -= delta
 }
 
+// FIX: Only return cacti from the active world
 export function getCactusRects() {
-  return [...document.querySelectorAll("[data-cactus]")].map(cactus =>
+  const world = activeWorld || document
+  return [...world.querySelectorAll("[data-cactus]")].map(cactus =>
     cactus.getBoundingClientRect()
   )
 }
