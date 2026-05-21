@@ -7,13 +7,18 @@ const app = express()
 const server = http.createServer(app)
 const io = new Server(server, {
   cors: { 
-    origin: ["https://nowiba1.github.io", "http://localhost:3000", "http://localhost:5500", "http://127.0.0.1:5500"], 
+    origin: [
+      "https://nowiba1.github.io", 
+      "http://localhost:3000", 
+      "http://localhost:5500", 
+      "http://127.0.0.1:5500",
+      "http://127.0.0.1:3000"
+    ], 
     methods: ["GET", "POST"] 
   }
 })
 
 app.use(express.static(path.join(__dirname, ".")))
-
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"))
 })
@@ -43,7 +48,8 @@ function createRoom(hostId) {
     speedScale: 1,
     score: 0,
     players: {},
-    cactusList: [] // Host will send cactus positions
+    cactusList: [],
+    cactusSeed: Math.floor(Math.random() * 1000000)  // FIX: Random seed for deterministic generation
   }
   return rooms[code]
 }
@@ -127,6 +133,7 @@ io.on("connection", (socket) => {
     room.score = 0
     room.speedScale = 1
     room.cactusList = []
+    room.cactusSeed = Math.floor(Math.random() * 1000000)
 
     // Reset all players
     Object.values(room.players).forEach(p => {
@@ -145,7 +152,11 @@ io.on("connection", (socket) => {
     setTimeout(() => {
       if (!rooms[room.code]) return
       room.state = "playing"
-      io.to(room.code).emit("gameStart", { players: roomPlayerList(room) })
+      // FIX: Include cactus seed in game start so non-host can generate obstacles
+      io.to(room.code).emit("gameStart", { 
+        players: roomPlayerList(room),
+        cactusSeed: room.cactusSeed
+      })
     }, 3000)
   })
 
@@ -158,13 +169,25 @@ io.on("connection", (socket) => {
     socket.to(room.code).emit("cactusUpdate", { cactusPositions })
   })
 
+  // ── Host broadcasts game state for non-host simulation ──
+  socket.on("gameStateBroadcast", ({ speedScale, score, cactusSeed }) => {
+    const room = getRoomOfSocket(socket.id)
+    if (!room || room.hostId !== socket.id) return
+    room.speedScale = speedScale
+    room.score = score
+    room.cactusSeed = cactusSeed
+    // FIX: Broadcast to all OTHER players for local simulation
+    socket.to(room.code).emit("gameStateSync", { speedScale, score, cactusSeed })
+  })
+
   // ── Host updates speed and score ──
   socket.on("speedUpdate", ({ speedScale, score }) => {
     const room = getRoomOfSocket(socket.id)
     if (!room || room.hostId !== socket.id) return
     room.speedScale = speedScale
     room.score = score
-    // Send to all players INCLUDING host so HUD stays synced
+    // FIX: Use io.to() to include ALL players (including host) for HUD sync
+    // Note: Inside socket.on, io.to() emits to all sockets in room including sender
     io.to(room.code).emit("speedSync", { speedScale, score })
   })
 
