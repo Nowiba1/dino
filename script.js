@@ -212,14 +212,13 @@ let mpLastTime  = null
 let mpSpeed     = 1
 let mpScoreVal  = 0
 let mpRafId     = null
-let mpPlayers   = {}      // id → { data, ctrl?, mpDino?, isMine }
+let mpPlayers   = {}
 let mpGround    = null
 let mpCloudsEl  = null
 let myDinoElem  = null
 let myDinoCtrl  = null
-
-// Prevent repeated obstacle broadcast per tick
-let mpObstaclePrevCount = 0
+let lastCactusSync = 0
+let remoteCacti = []
 
 function initializeSocket() {
   if (socket && socket.connected) return
@@ -232,7 +231,7 @@ function initializeSocket() {
 
   socket.on("connect_error", (error) => {
     console.error("Connection error:", error)
-    alert("Failed to connect to game server. Please try again.")
+    alert("Failed to connect to game server. Please try again later.")
   })
 
   socket.on("disconnect", (reason) => {
@@ -255,11 +254,21 @@ function initializeSocket() {
     updateMpScoreDisplay(score) 
   })
   
-  socket.on("playerMoved", ({ id, bottom, state }) => { 
+  socket.on("playerMoved", ({ id, bottom, state, xOffset }) => { 
     if (mpPlayers[id]) { 
       mpPlayers[id].data.bottom = bottom
-      mpPlayers[id].data.state = state 
+      mpPlayers[id].data.state = state
+      if (xOffset !== undefined) {
+        mpPlayers[id].data.xOffset = xOffset
+      }
     } 
+  })
+  
+  // Receive cactus positions from host
+  socket.on("cactusUpdate", ({ cactusPositions }) => {
+    if (!isHost) {
+      syncRemoteCacti(cactusPositions)
+    }
   })
   
   socket.on("playerDied", onPlayerDied)
@@ -274,6 +283,21 @@ function initializeSocket() {
   })
   
   socket.on("gameOver", onGameOver)
+}
+
+function syncRemoteCacti(positions) {
+  // Clear existing remote cacti
+  multiWorld.querySelectorAll(".remote-cactus").forEach(c => c.remove())
+  
+  // Create cacti at received positions
+  positions.forEach(pos => {
+    const cactus = document.createElement("img")
+    cactus.src = "images/cactus.png"
+    cactus.classList.add("cactus", "remote-cactus")
+    cactus.dataset.cactus = true
+    setCustomProperty(cactus, "--left", pos)
+    multiWorld.appendChild(cactus)
+  })
 }
 
 function disconnectSocket() {
@@ -325,17 +349,21 @@ function setupMpWorld(players) {
   const list = Array.isArray(players) ? players : Object.values(players)
 
   // Clear leftovers
-  multiWorld.querySelectorAll(".mp-dino, [data-mp-dino], [data-cactus]").forEach(e => e.remove())
+  multiWorld.querySelectorAll(".mp-dino, [data-mp-dino], [data-cactus], .remote-cactus").forEach(e => e.remove())
   if (myDinoElem) { myDinoElem.remove(); myDinoElem = null }
   myDinoCtrl = null
   mpPlayers  = {}
+  remoteCacti = []
 
   mpGround   = multiWorld.querySelectorAll("[data-mp-ground]")
   mpCloudsEl = multiWorld.querySelectorAll("[data-clouds]")
 
   setupGround(mpGround)
   setupClouds(mpCloudsEl)
-  setupCactus(multiWorld)
+  
+  if (isHost) {
+    setupCactus(multiWorld)
+  }
 
   list.forEach(p => {
     if (socket && p.id === socket.id) {
@@ -348,6 +376,7 @@ function setupMpWorld(players) {
       setCustomProperty(myDinoElem, "--bottom", 0)
       multiWorld.appendChild(myDinoElem)
       myDinoCtrl = createDinoController(myDinoElem)
+      myDinoCtrl.setup()
       mpPlayers[p.id] = { data: { ...p }, ctrl: myDinoCtrl, isMine: true }
     } else {
       const mpDino = createMpDino(multiWorld, p)
@@ -367,7 +396,7 @@ function buildMpHud(players) {
     row.innerHTML = `
       <span class="hud-dot" style="background:${p.color}"></span>
       <span>${p.name}</span>
-      <span class="hud-hearts" id="hearts-${p.id}">${"❤️".repeat(p.lives)}</span>
+      <span class="hud-hearts" id="hearts-${p.id}">${"❤️".repeat(Math.max(0, p.lives))}</span>
     `
     mpHud.appendChild(row)
   })
@@ -400,22 +429,37 @@ function mpLoop(time) {
 
   // My dino
   const me = mpPlayers[socket?.id]
-  if (me && me.isMine && me.ctrl) {
+  if (me && me.isMine && me.ctrl && me.data.isAlive) {
     me.ctrl.update(delta, mpSpeed)
     const bottom    = getCustomProperty(myDinoElem, "--bottom")
     const isJumping = bottom > 0.5
-    const state     = isJumping ? "jump" : (me.data.isAlive ? "run" : me.data.state)
-    socket.emit("positionUpdate", { bottom, state })
+    const state     = isJumping ? "jump" : "run"
+    socket.emit("positionUpdate", { 
+      bottom, 
+      state,
+      xOffset: me.data.xOffset 
+    })
 
     // Collision — only if alive and not invincible
-    if (me.data.isAlive && !me.data.isInvincible) {
+    if (!me.data.isInvincible) {
       const rect = me.ctrl.getRect()
-      const hit  = getCactusRects().some(r => isCollision(r, rect))
+      const allCacti = multiWorld.querySelectorAll("[data-cactus]")
+      const hit = [...allCacti].some(cactus => {
+        return isCollision(cactus.getBoundingClientRect(), rect)
+      })
       if (hit) {
         me.data.isInvincible = true
         socket.emit("playerHit")
       }
     }
+  } else if (me && me.isMine && !me.data.isAlive) {
+    // Spectating - update position but don't check collisions
+    const bottom = getCustomProperty(myDinoElem, "--bottom")
+    socket.emit("positionUpdate", { 
+      bottom, 
+      state: me.data.state,
+      xOffset: me.data.xOffset 
+    })
   }
 
   // Remote dinos
@@ -432,6 +476,15 @@ function mpLoop(time) {
     mpScoreVal += delta * 0.01
     const score = Math.floor(mpScoreVal)
     updateMpScoreDisplay(score)
+    
+    // Sync cactus positions to other players (every 100ms to reduce network load)
+    if (time - lastCactusSync > 100) {
+      lastCactusSync = time
+      const cactusElements = multiWorld.querySelectorAll("[data-cactus]:not(.remote-cactus)")
+      const positions = [...cactusElements].map(c => getCustomProperty(c, "--left"))
+      socket.emit("syncCactus", { cactusPositions: positions })
+    }
+    
     socket.emit("speedUpdate", { speedScale: mpSpeed, score })
     socket.emit("scoreUpdate", { score })
   }
@@ -448,7 +501,8 @@ function mpStop() {
   if (myDinoElem) { myDinoElem.remove(); myDinoElem = null }
   myDinoCtrl = null
   mpPlayers  = {}
-  multiWorld.querySelectorAll("[data-cactus]").forEach(c => c.remove())
+  remoteCacti = []
+  multiWorld.querySelectorAll("[data-cactus], .remote-cactus").forEach(c => c.remove())
 }
 
 // ── Socket handlers ───────────────────────────────────────────
@@ -493,7 +547,6 @@ function onGameCountdown({ players }) {
       countdownOvl.classList.add("hidden")
     } else {
       countdownNum.textContent = String(n)
-      // Re-trigger CSS animation by forcing reflow
       countdownNum.style.animation = "none"
       void countdownNum.offsetWidth
       countdownNum.style.animation = ""
@@ -503,12 +556,17 @@ function onGameCountdown({ players }) {
 
 function onGameStart({ players }) {
   const list = Array.isArray(players) ? players : Object.values(players)
-  list.forEach(p => { if (mpPlayers[p.id]) mpPlayers[p.id].data = { ...p } })
+  list.forEach(p => { 
+    if (mpPlayers[p.id]) {
+      mpPlayers[p.id].data = { ...p, ...mpPlayers[p.id].data, ...p }
+    }
+  })
 
   mpRunning   = true
   mpLastTime  = null
   mpSpeed     = 1
   mpScoreVal  = 0
+  lastCactusSync = 0
 
   if (myDinoCtrl) myDinoCtrl.setup()
 
@@ -520,6 +578,7 @@ function onPlayerDied({ id, players }) {
   if (mpPlayers[id]) {
     mpPlayers[id].data.isAlive = false
     mpPlayers[id].data.state   = "spectate"
+    mpPlayers[id].data.lives   = 0
     if (mpPlayers[id].isMine) {
       if (myDinoCtrl) myDinoCtrl.setLose()
       showMpMessage("💀 You're out! Spectating…")
@@ -531,13 +590,22 @@ function onPlayerDied({ id, players }) {
 }
 
 function onPlayerRespawn({ id, lives, spawnAnim, players }) {
-  const list = Array.isArray(players) ? players : Object.values(players)
-  list.forEach(p => { if (mpPlayers[p.id]) mpPlayers[p.id].data = { ...p } })
+  if (mpPlayers[id]) {
+    mpPlayers[id].data.lives = lives
+    mpPlayers[id].data.spawnAnim = spawnAnim
+    mpPlayers[id].data.isAlive = true
+    mpPlayers[id].data.state = "spawning"
+    mpPlayers[id].data.bottom = 0
+    mpPlayers[id].data.isInvincible = true
+  }
 
   updateHudHearts(id, lives)
 
   if (socket && id === socket.id) {
-    if (myDinoCtrl) myDinoCtrl.setup()
+    if (myDinoCtrl) {
+      myDinoCtrl.setup()
+      setCustomProperty(myDinoElem, "--bottom", 0)
+    }
     const icons = { jetpack: "🚀", parachute: "🪂", pterodactyl: "🦕" }
     showMpMessage(`${icons[spawnAnim] || "✨"} Respawning via ${spawnAnim}! Invincible for 5s`)
     setTimeout(() => hideMpMessage(), 4500)
@@ -565,110 +633,10 @@ function onGameOver({ players, winner }) {
     <div class="final-row">
       <span class="final-dot" style="background:${p.color}"></span>
       <span class="final-name">${i + 1}. ${p.name}${socket && p.id === socket.id ? " (You)" : ""}</span>
-      <span class="final-score">${p.score}</span>
+      <span class="final-score">${Math.floor(p.score)}</span>
     </div>
   `).join("")
 }
 
 function showMpMessage(msg) {
-  mpMessage.textContent = msg
-  mpMessage.classList.remove("hidden")
-}
-function hideMpMessage() {
-  mpMessage.classList.add("hidden")
-}
-
-// ── Collision ─────────────────────────────────────────────────
-function isCollision(r1, r2) {
-  return r1.left < r2.right && r1.top < r2.bottom && r1.right > r2.left && r1.bottom > r2.top
-}
-
-// ── Color filter ──────────────────────────────────────────────
-function colorFilter(hex) {
-  const map = {
-    "#e74c3c": "sepia(1) saturate(8) hue-rotate(320deg) brightness(0.9)",
-    "#3498db": "sepia(1) saturate(8) hue-rotate(175deg) brightness(0.9)",
-    "#2ecc71": "sepia(1) saturate(8) hue-rotate(85deg)  brightness(0.85)",
-    "#f1c40f": "sepia(1) saturate(8) hue-rotate(10deg)  brightness(1.1)",
-  }
-  return map[hex] || "none"
-}
-
-// ════════════════════════════════════════════════════════════
-//  BUTTON WIRING
-// ════════════════════════════════════════════════════════════
-
-// Solo
-btnSolo.addEventListener("click", () => { showScreen("solo"); soloInit() })
-btnSoloBack.addEventListener("click", () => { soloStop(); showScreen("menu") })
-
-// Create Room
-btnCreate.addEventListener("click", () => {
-  initializeSocket()
-  socket.emit("createRoom", (res) => {
-    if (!res.ok) return alert("Could not create room: " + (res.error || "unknown error"))
-    myPlayer   = res.player
-    myRoomCode = res.code
-    isHost     = true
-    lobbyCode.textContent = res.code
-    const list = Array.isArray(res.players) ? res.players : Object.values(res.players)
-    renderLobby(list)
-    updateStartBtn(list)
-    showScreen("lobby")
-  })
-})
-
-// Join Room
-btnJoinOpen.addEventListener("click", () => {
-  joinError.textContent = ""
-  roomCodeInput.value   = ""
-  showScreen("join")
-})
-btnJoinBack.addEventListener("click", () => showScreen("menu"))
-
-btnJoinConfirm.addEventListener("click", () => {
-  const code = roomCodeInput.value.trim().toUpperCase()
-  if (code.length < 4) { joinError.textContent = "Enter a 4-character code."; return }
-  joinError.textContent = "Connecting…"
-  initializeSocket()
-  socket.emit("joinRoom", { code }, (res) => {
-    if (!res.ok) { joinError.textContent = res.error || "Could not join."; return }
-    myPlayer   = res.player
-    myRoomCode = res.code
-    isHost     = false
-    lobbyCode.textContent = res.code
-    const list = Array.isArray(res.players) ? res.players : Object.values(res.players)
-    renderLobby(list)
-    updateStartBtn(list)
-    showScreen("lobby")
-  })
-})
-roomCodeInput.addEventListener("keydown", e => { if (e.key === "Enter") btnJoinConfirm.click() })
-
-// Lobby actions
-btnStart.addEventListener("click", () => { if (isHost) socket.emit("startGame") })
-
-btnLobbyBack.addEventListener("click", () => {
-  disconnectSocket()
-  showScreen("menu")
-})
-
-// Multi back
-btnMultiBack.addEventListener("click", () => {
-  mpStop()
-  disconnectSocket()
-  showScreen("menu")
-})
-
-// Game over
-btnPlayAgain.addEventListener("click", () => {
-  disconnectSocket()
-  showScreen("menu")
-})
-btnGoMenu.addEventListener("click", () => {
-  disconnectSocket()
-  showScreen("menu")
-})
-
-// ── Boot ──────────────────────────────────────────────────────
-showScreen("menu")
+  mpMessage.textContent =
