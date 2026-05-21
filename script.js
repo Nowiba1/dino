@@ -639,4 +639,136 @@ function onGameOver({ players, winner }) {
 }
 
 function showMpMessage(msg) {
-  mpMessage.textContent =
+  mpMessage.textContent = msg
+  mpMessage.classList.remove("hidden")
+}
+function hideMpMessage() {
+  mpMessage.classList.add("hidden")
+}
+
+// ── Collision ─────────────────────────────────────────────────
+function isCollision(r1, r2) {
+  return r1.left < r2.right && r1.top < r2.bottom && r1.right > r2.left && r1.bottom > r2.top
+}
+
+// ── Color filter ──────────────────────────────────────────────
+function colorFilter(hex) {
+  const map = {
+    "#e74c3c": "sepia(1) saturate(8) hue-rotate(320deg) brightness(0.9)",
+    "#3498db": "sepia(1) saturate(8) hue-rotate(175deg) brightness(0.9)",
+    "#2ecc71": "sepia(1) saturate(8) hue-rotate(85deg)  brightness(0.85)",
+    "#f1c40f": "sepia(1) saturate(8) hue-rotate(10deg)  brightness(1.1)",
+  }
+  return map[hex] || "none"
+}
+
+// ════════════════════════════════════════════════════════════
+//  BUTTON WIRING
+// ════════════════════════════════════════════════════════════
+
+// Solo
+btnSolo.addEventListener("click", () => { showScreen("solo"); soloInit() })
+btnSoloBack.addEventListener("click", () => { soloStop(); showScreen("menu") })
+
+// Create Room
+btnCreate.addEventListener("click", () => {
+  initializeSocket()
+  if (!socket || !socket.connected) {
+    setTimeout(() => {
+      socket.emit("createRoom", (res) => {
+        if (!res.ok) return alert("Could not create room: " + (res.error || "unknown error"))
+        myPlayer   = res.player
+        myRoomCode = res.code
+        isHost     = true
+        lobbyCode.textContent = res.code
+        const list = Array.isArray(res.players) ? res.players : Object.values(res.players)
+        renderLobby(list)
+        updateStartBtn(list)
+        showScreen("lobby")
+      })
+    }, 500)
+    return
+  }
+  socket.emit("createRoom", (res) => {
+    if (!res.ok) return alert("Could not create room: " + (res.error || "unknown error"))
+    myPlayer   = res.player
+    myRoomCode = res.code
+    isHost     = true
+    lobbyCode.textContent = res.code
+    const list = Array.isArray(res.players) ? res.players : Object.values(res.players)
+    renderLobby(list)
+    updateStartBtn(list)
+    showScreen("lobby")
+  })
+})
+
+// Join Room
+btnJoinOpen.addEventListener("click", () => {
+  joinError.textContent = ""
+  roomCodeInput.value   = ""
+  showScreen("join")
+})
+btnJoinBack.addEventListener("click", () => showScreen("menu"))
+
+btnJoinConfirm.addEventListener("click", () => {
+  const code = roomCodeInput.value.trim().toUpperCase()
+  if (code.length < 4) { joinError.textContent = "Enter a 4-character code."; return }
+  joinError.textContent = "Connecting…"
+  initializeSocket()
+  if (!socket || !socket.connected) {
+    setTimeout(() => {
+      socket.emit("joinRoom", { code }, (res) => {
+        if (!res.ok) { joinError.textContent = res.error || "Could not join."; return }
+        myPlayer   = res.player
+        myRoomCode = res.code
+        isHost     = false
+        lobbyCode.textContent = res.code
+        const list = Array.isArray(res.players) ? res.players : Object.values(res.players)
+        renderLobby(list)
+        updateStartBtn(list)
+        showScreen("lobby")
+      })
+    }, 500)
+    return
+  }
+  socket.emit("joinRoom", { code }, (res) => {
+    if (!res.ok) { joinError.textContent = res.error || "Could not join."; return }
+    myPlayer   = res.player
+    myRoomCode = res.code
+    isHost     = false
+    lobbyCode.textContent = res.code
+    const list = Array.isArray(res.players) ? res.players : Object.values(res.players)
+    renderLobby(list)
+    updateStartBtn(list)
+    showScreen("lobby")
+  })
+})
+roomCodeInput.addEventListener("keydown", e => { if (e.key === "Enter") btnJoinConfirm.click() })
+
+// Lobby actions
+btnStart.addEventListener("click", () => { if (isHost && socket) socket.emit("startGame") })
+
+btnLobbyBack.addEventListener("click", () => {
+  disconnectSocket()
+  showScreen("menu")
+})
+
+// Multi back
+btnMultiBack.addEventListener("click", () => {
+  mpStop()
+  disconnectSocket()
+  showScreen("menu")
+})
+
+// Game over
+btnPlayAgain.addEventListener("click", () => {
+  disconnectSocket()
+  showScreen("menu")
+})
+btnGoMenu.addEventListener("click", () => {
+  disconnectSocket()
+  showScreen("menu")
+})
+
+// ── Boot ──────────────────────────────────────────────────────
+showScreen("menu")
