@@ -1,79 +1,141 @@
-import {
-  incrementCustomProperty,
-  setCustomProperty,
-  getCustomProperty,
-} from "./update.js"
+import { incrementCustomProperty, setCustomProperty, getCustomProperty } from "./update.js"
 
-const dinoElem = document.querySelector("[data-dino]")
-const JUMP_SPEED = 0.45
-const GRAVITY = 0.0015
-const DINO_FRAME_COUNT = 2
-const FRAME_TIME = 100
-let gameSound = new Audio("audio/press_sound.mp3");
-gameSound.volume=0.5;
-let Collisionsound = new Audio("audio/hit_sound.mp3");
-Collisionsound.volume = 0.5;
+const JUMP_SPEED   = 0.45
+const GRAVITY      = 0.0015
+const FRAME_COUNT  = 2
+const FRAME_TIME   = 100
 
-let isJumping
-let dinoFrame
-let currentFrameTime
-let yVelocity
-export function setupDino() {
-  isJumping = false
-  dinoFrame = 0
-  currentFrameTime = 0
-  yVelocity = 0
-  setCustomProperty(dinoElem, "--bottom", 0)
-  document.removeEventListener("keydown", onJump)
-  document.addEventListener("keydown", onJump)
-}
+// ── Solo Dino ────────────────────────────────────────────────────────────────
+export function createDinoController(dinoElem) {
+  let isJumping        = false
+  let dinoFrame        = 0
+  let currentFrameTime = 0
+  let yVelocity        = 0
+  let isLose           = false
 
-export function updateDino(delta, speedScale) {
-  handleRun(delta, speedScale)
-  handleJump(delta)
-}
+  const jumpSound      = new Audio("audio/press_sound.mp3")
+  const hitSound       = new Audio("audio/hit_sound.mp3")
+  jumpSound.volume     = 0.5
+  hitSound.volume      = 0.5
 
-export function getDinoRect() {
-  return dinoElem.getBoundingClientRect()
-}
-
-export function setDinoLose() {
-  dinoElem.src = "images/dino-lose.png"
-  Collisionsound.play();
-  
-}
-
-function handleRun(delta, speedScale) {
-  if (isJumping) {
-    dinoElem.src = `images/dino-stationary.png`
-    return
+  function onJump(e) {
+    if (isJumping || isLose) return
+    if (e.type === "keydown" && e.code !== "Space" && e.code !== "ArrowUp") return
+    yVelocity = JUMP_SPEED
+    isJumping = true
+    jumpSound.play().catch(() => {})
   }
 
-  if (currentFrameTime >= FRAME_TIME) {
-    dinoFrame = (dinoFrame + 1) % DINO_FRAME_COUNT
-    dinoElem.src = `images/dino-run-${dinoFrame}.png`
-    currentFrameTime -= FRAME_TIME
-  }
-  currentFrameTime += delta * speedScale
-}
-
-function handleJump(delta) {
-  if (!isJumping) return
-
-  incrementCustomProperty(dinoElem, "--bottom", yVelocity * delta)
-
-  if (getCustomProperty(dinoElem, "--bottom") <= 0) {
+  function setup() {
+    isJumping        = false
+    dinoFrame        = 0
+    currentFrameTime = 0
+    yVelocity        = 0
+    isLose           = false
     setCustomProperty(dinoElem, "--bottom", 0)
-    isJumping = false
+    dinoElem.src     = "images/dino-stationary.png"
+    document.removeEventListener("keydown", onJump)
+    document.addEventListener("keydown", onJump)
+    dinoElem.removeEventListener("touchstart", onJump)
+    dinoElem.ownerDocument.body.removeEventListener("touchstart", onJump)
+    dinoElem.ownerDocument.body.addEventListener("touchstart", onJump, { passive: true })
   }
 
-  yVelocity -= GRAVITY * delta
+  function update(delta, speedScale) {
+    handleRun(delta, speedScale)
+    handleJump(delta)
+  }
+
+  function handleRun(delta, speedScale) {
+    if (isJumping) {
+      dinoElem.src = "images/dino-stationary.png"
+      return
+    }
+    if (currentFrameTime >= FRAME_TIME) {
+      dinoFrame = (dinoFrame + 1) % FRAME_COUNT
+      dinoElem.src = `images/dino-run-${dinoFrame}.png`
+      currentFrameTime -= FRAME_TIME
+    }
+    currentFrameTime += delta * speedScale
+  }
+
+  function handleJump(delta) {
+    if (!isJumping) return
+    incrementCustomProperty(dinoElem, "--bottom", yVelocity * delta)
+    if (getCustomProperty(dinoElem, "--bottom") <= 0) {
+      setCustomProperty(dinoElem, "--bottom", 0)
+      isJumping = false
+    }
+    yVelocity -= GRAVITY * delta
+  }
+
+  function getRect() {
+    return dinoElem.getBoundingClientRect()
+  }
+
+  function setLose() {
+    isLose = true
+    dinoElem.src = "images/dino-lose.png"
+    hitSound.play().catch(() => {})
+    document.removeEventListener("keydown", onJump)
+    dinoElem.ownerDocument.body.removeEventListener("touchstart", onJump)
+  }
+
+  return { setup, update, getRect, setLose, onJump }
 }
 
-function onJump(e) {
-  if (e.code !== "Space" || isJumping) return
+// ── MP Dino Element ──────────────────────────────────────────────────────────
+// Creates and manages a dino img element for a remote player
+export function createMpDino(worldElem, player) {
+  const el = document.createElement("img")
+  el.src              = "images/dino-stationary.png"
+  el.classList.add("mp-dino")
+  el.dataset.mpDino   = player.id
+  el.style.left       = `${player.xOffset}%`
+  el.style.filter     = colorFilter(player.color)
+  setCustomProperty(el, "--bottom", 0)
+  worldElem.appendChild(el)
 
-  yVelocity = JUMP_SPEED
-  isJumping = true
-  gameSound.play()
+  let frame     = 0
+  let frameTime = 0
+
+  function update(delta, speedScale, state, bottom) {
+    setCustomProperty(el, "--bottom", bottom)
+    if (state === "jump") {
+      el.src = "images/dino-stationary.png"
+    } else if (state === "dead" || state === "spectate") {
+      el.src = "images/dino-lose.png"
+      el.style.opacity = "0.35"
+    } else if (state === "spawning") {
+      el.src = "images/dino-stationary.png"
+    } else {
+      el.style.opacity = "1"
+      if (frameTime >= FRAME_TIME) {
+        frame = (frame + 1) % FRAME_COUNT
+        el.src = `images/dino-run-${frame}.png`
+        frameTime -= FRAME_TIME
+      }
+      frameTime += delta * speedScale
+    }
+  }
+
+  function setInvincible(val) {
+    if (val) el.classList.add("invincible")
+    else     el.classList.remove("invincible")
+  }
+
+  function remove() { el.remove() }
+
+  return { el, update, setInvincible, remove }
+}
+
+// Approximates a CSS color-tint filter for the dino sprite
+function colorFilter(hex) {
+  const map = {
+    "#e74c3c": "sepia(1) saturate(8) hue-rotate(320deg) brightness(0.9)",
+    "#3498db": "sepia(1) saturate(8) hue-rotate(175deg) brightness(0.9)",
+    "#2ecc71": "sepia(1) saturate(8) hue-rotate(85deg)  brightness(0.85)",
+    "#f1c40f": "sepia(1) saturate(8) hue-rotate(10deg)  brightness(1.1)",
+  }
+  return map[hex] || "none"
 }
