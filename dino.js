@@ -12,6 +12,7 @@ export function createDinoController(dinoElem) {
   let currentFrameTime = 0
   let yVelocity        = 0
   let isLose           = false
+  let isSetup          = false  // FIX: Track whether listeners are active
 
   const jumpSound      = new Audio("audio/press_sound.mp3")
   const hitSound       = new Audio("audio/hit_sound.mp3")
@@ -26,6 +27,22 @@ export function createDinoController(dinoElem) {
     jumpSound.play().catch(() => {})
   }
 
+  // FIX: Separate function to clean up listeners
+  function removeListeners() {
+    document.removeEventListener("keydown", onJump)
+    document.body.removeEventListener("touchstart", onJump)
+    isSetup = false
+  }
+
+  // FIX: Separate function to add listeners
+  function addListeners() {
+    if (!isSetup) {
+      document.addEventListener("keydown", onJump)
+      document.body.addEventListener("touchstart", onJump, { passive: true })
+      isSetup = true
+    }
+  }
+
   function setup() {
     isJumping        = false
     dinoFrame        = 0
@@ -34,11 +51,7 @@ export function createDinoController(dinoElem) {
     isLose           = false
     setCustomProperty(dinoElem, "--bottom", 0)
     dinoElem.src     = "images/dino-stationary.png"
-    document.removeEventListener("keydown", onJump)
-    document.addEventListener("keydown", onJump)
-    dinoElem.removeEventListener("touchstart", onJump)
-    dinoElem.ownerDocument.body.removeEventListener("touchstart", onJump)
-    dinoElem.ownerDocument.body.addEventListener("touchstart", onJump, { passive: true })
+    addListeners()
   }
 
   function update(delta, speedScale) {
@@ -77,15 +90,18 @@ export function createDinoController(dinoElem) {
     isLose = true
     dinoElem.src = "images/dino-lose.png"
     hitSound.play().catch(() => {})
-    document.removeEventListener("keydown", onJump)
-    dinoElem.ownerDocument.body.removeEventListener("touchstart", onJump)
+    removeListeners()
   }
 
-  return { setup, update, getRect, setLose, onJump }
+  // FIX: Export cleanup for external use (e.g., mpStop)
+  function destroy() {
+    removeListeners()
+  }
+
+  return { setup, update, getRect, setLose, destroy, onJump }
 }
 
 // ── MP Dino Element ──────────────────────────────────────────────────────────
-// Creates and manages a dino img element for a remote player
 export function createMpDino(worldElem, player) {
   const el = document.createElement("img")
   el.src              = "images/dino-stationary.png"
@@ -107,9 +123,13 @@ export function createMpDino(worldElem, player) {
       el.src = "images/dino-lose.png"
       el.style.opacity = "0.35"
     } else if (state === "spawning") {
+      // FIX: Show stationary dino with invincible flash during respawn
       el.src = "images/dino-stationary.png"
+      el.style.opacity = "1"
+      el.classList.add("invincible")
     } else {
       el.style.opacity = "1"
+      el.classList.remove("invincible")
       if (frameTime >= FRAME_TIME) {
         frame = (frame + 1) % FRAME_COUNT
         el.src = `images/dino-run-${frame}.png`
