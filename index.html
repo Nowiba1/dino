@@ -1,29 +1,120 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dino Game Clone | Abinandh MJ</title>
-    <link rel="shortcut icon" href="images/favicon.ico" type="image/x-icon">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
-    <script src="script.js" type="module"></script>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1">
+  <title>Dino Party 🦖</title>
+  <link rel="shortcut icon" href="images/favicon.ico" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <img src="images/logo-dino.png" alt="dino-logo" width="100px" class="logo">
-    <div class="world" data-world>
-        <div class="highscore" data-Highscore><span class="high">HI</span> 10000 </div>
-        <div class="separator">|</div>
-        <div class="score" data-score>0</div>
-        <div class="start-screen" data-start-screen>Press any key to Start</div>
-        <img src="images/ground.png" class="ground" data-ground>
-        <img src="images/ground.png" class="ground" data-ground>
-        <img src="images/clouds.png" class="clouds" data-clouds>
-        <img src="images/clouds.png" class="clouds" data-clouds>
-        <img src="images/dino-stationary.png" class="dino" data-dino>
+
+  <!-- ═══════════════════════════════════════════════
+       MAIN MENU
+  ═══════════════════════════════════════════════ -->
+  <div id="main-menu" class="screen active">
+    <div class="menu-bg-deco"></div>
+    <img src="images/logo-dino.png" alt="dino-logo" class="menu-logo">
+    <h1 class="game-title">DINO<span class="title-accent">PARTY</span></h1>
+    <p class="subtitle">up to 4 players • chaos guaranteed</p>
+    <div class="menu-buttons">
+      <button class="btn btn-primary" id="btn-solo">▶ Solo Run</button>
+      <button class="btn btn-secondary" id="btn-create">⊕ Create Room</button>
+      <button class="btn btn-secondary" id="btn-join-open">⊞ Join Room</button>
     </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       JOIN ROOM PANEL
+  ═══════════════════════════════════════════════ -->
+  <div id="join-screen" class="screen">
+    <h2 class="screen-title">Join Room</h2>
+    <p class="screen-sub">Enter the 4-character room code</p>
+    <input id="room-code-input" class="code-input" maxlength="4" placeholder="A1B2" autocomplete="off" spellcheck="false">
+    <div class="menu-buttons">
+      <button class="btn btn-primary" id="btn-join-confirm">Join →</button>
+      <button class="btn btn-ghost" id="btn-join-back">← Back</button>
+    </div>
+    <p id="join-error" class="error-msg"></p>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       LOBBY
+  ═══════════════════════════════════════════════ -->
+  <div id="lobby-screen" class="screen">
+    <h2 class="screen-title">Lobby</h2>
+    <div class="room-code-display">
+      Room Code: <span id="lobby-code" class="code-badge">----</span>
+    </div>
+    <p class="screen-sub">Share this code with friends!</p>
+    <div id="player-slots" class="player-slots"></div>
+    <button class="btn btn-primary" id="btn-start" style="display:none">🦖 Start Game!</button>
+    <p id="lobby-waiting" class="waiting-msg">Waiting for host to start…</p>
+    <button class="btn btn-ghost" id="btn-lobby-back">← Leave</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       COUNTDOWN OVERLAY
+  ═══════════════════════════════════════════════ -->
+  <div id="countdown-overlay" class="overlay hidden">
+    <div id="countdown-number" class="countdown-num">3</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       GAME SCREEN — SOLO
+  ═══════════════════════════════════════════════ -->
+  <div id="solo-screen" class="screen">
+    <div class="world" id="solo-world" data-world>
+      <div class="highscore" id="solo-highscore"><span class="high">HI</span> <span id="hi-val">00000</span></div>
+      <div class="separator">|</div>
+      <div class="score" id="solo-score">00000</div>
+      <div class="start-screen" id="solo-start-screen">Press Space / Tap to Start</div>
+      <div class="end-screen hidden" id="solo-end-screen">GAME OVER<br><span class="restart-hint">Press Space to Restart</span></div>
+      <img src="images/ground.png" class="ground" data-ground>
+      <img src="images/ground.png" class="ground" data-ground>
+      <img src="images/clouds.png" class="clouds" data-clouds>
+      <img src="images/clouds.png" class="clouds" data-clouds>
+      <img src="images/dino-stationary.png" class="dino" data-dino id="solo-dino">
+    </div>
+    <button class="btn btn-ghost back-btn" id="btn-solo-back">✕ Menu</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       GAME SCREEN — MULTIPLAYER
+  ═══════════════════════════════════════════════ -->
+  <div id="multi-screen" class="screen">
+    <div class="world" id="multi-world">
+      <!-- Score HUD -->
+      <div class="mp-hud" id="mp-hud"></div>
+      <!-- In-game message (respawn, spectate) -->
+      <div class="mp-message hidden" id="mp-message"></div>
+      <!-- Ground & clouds injected by JS -->
+      <img src="images/ground.png" class="ground" data-mp-ground>
+      <img src="images/ground.png" class="ground" data-mp-ground>
+      <img src="images/clouds.png" class="clouds" data-clouds>
+      <img src="images/clouds.png" class="clouds" data-clouds>
+    </div>
+    <button class="btn btn-ghost back-btn" id="btn-multi-back">✕ Leave</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════
+       GAME OVER SCREEN
+  ═══════════════════════════════════════════════ -->
+  <div id="gameover-screen" class="screen">
+    <h2 class="screen-title">GAME OVER</h2>
+    <div id="winner-display" class="winner-box"></div>
+    <div id="final-scores" class="final-scores"></div>
+    <div class="menu-buttons">
+      <button class="btn btn-primary" id="btn-play-again">▶ Play Again</button>
+      <button class="btn btn-ghost" id="btn-go-menu">⌂ Main Menu</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script type="module" src="script.js"></script>
 </body>
 </html>
