@@ -1,93 +1,480 @@
+/* ── Reset & Base ─────────────────────────────────────────────── */
 *, *::before, *::after {
-    box-sizing: border-box;
-    user-select: none;
-  }
-  
-  body {
-    margin: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-    font-family: 'Press Start 2P', cursive;
-    background-color: #f7f7f7;
-  }
-  
-  .world {
-    overflow: hidden;
-    position: relative;
-  }
-  
-  .score {
-    position: absolute;
-    font-size: 2vmin;
-    color: #535353;
-    right: 1vmin;
-    top: 1vmin;
-  }
-  
-  .highscore {
-    position: absolute;
-    font-size: 2vmin;
-    color: #535353;
-    right: 10vmin;
-    top: 1vmin;
-  }
-  .separator {
-    position: absolute;
-    font-size: 2vmin;
-    color: #535353;
-    right: 7vmin;
-    top: 1vmin;
-  }
-  
-  .start-screen {
-    position: absolute;
-    font-size: 2vmin;
-    color: #535353;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-  }
-  
-  .hide {
-    display: none;
-  }
-  
-  .ground {
-    --left: 0;
-    position: absolute;
-    width: 300%;
-    bottom: 0;
-    left: calc(var(--left) * 1%)
-  }
-  
-  .clouds {
-    --left: 0;
-    top: 0;
-    position: absolute;
-    width: 150%;
-    left: calc(var(--left) * 1%);
-  }
-
-.dino {
-    --bottom: 0;
-    position: absolute;
-    left: 1%;
-    height: 30%;
-    bottom: calc(var(--bottom) * 1%);
-}
-  
-.cactus {
-    position: absolute;
-    left: calc(var(--left) * 1%);
-    height: 30%;
-    bottom: 0;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.logo {
+:root {
+  --bg: #f0ede6;
+  --surface: #ffffff;
+  --border: #535353;
+  --text: #535353;
+  --accent: #e74c3c;
+  --pixel: 'Press Start 2P', cursive;
+  --shadow: 4px 4px 0px #535353;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  font-family: var(--pixel);
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(231,76,60,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(52,152,219,0.06) 0%, transparent 50%);
+  overflow: hidden;
+}
+
+/* ── Screen System ────────────────────────────────────────────── */
+.screen {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  min-height: 100vh;
+  padding: 2rem;
   position: absolute;
+  top: 0; left: 0;
+  animation: screenIn 0.25s ease forwards;
+}
+.screen.active { display: flex; }
+
+@keyframes screenIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Main Menu ────────────────────────────────────────────────── */
+.menu-bg-deco {
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(0deg, transparent, transparent 39px, rgba(83,83,83,0.07) 39px, rgba(83,83,83,0.07) 40px),
+    repeating-linear-gradient(90deg, transparent, transparent 39px, rgba(83,83,83,0.07) 39px, rgba(83,83,83,0.07) 40px);
+  pointer-events: none;
+}
+
+.menu-logo {
+  width: 80px;
+  margin-bottom: 1rem;
+  image-rendering: pixelated;
+  animation: bobble 2s ease-in-out infinite;
+}
+
+@keyframes bobble {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-8px); }
+}
+
+.game-title {
+  font-size: clamp(2rem, 6vw, 3.5rem);
+  color: var(--border);
+  margin: 0 0 0.25rem;
+  letter-spacing: 4px;
+  line-height: 1.2;
+}
+.title-accent {
+  color: var(--accent);
+  display: block;
+  font-size: 0.65em;
+  letter-spacing: 6px;
+}
+
+.subtitle {
+  font-size: clamp(0.5rem, 1.5vw, 0.65rem);
+  color: #888;
+  margin: 0 0 2.5rem;
+  letter-spacing: 1px;
+}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.menu-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
+  max-width: 320px;
+}
+
+.btn {
+  font-family: var(--pixel);
+  font-size: clamp(0.55rem, 1.8vw, 0.75rem);
+  padding: 1rem 1.5rem;
+  border: 3px solid var(--border);
+  cursor: pointer;
+  transition: transform 0.08s, box-shadow 0.08s;
+  letter-spacing: 1px;
+  text-align: center;
+}
+.btn:active {
+  transform: translate(3px, 3px);
+  box-shadow: none !important;
+}
+
+.btn-primary {
+  background: var(--border);
+  color: #fff;
+  box-shadow: var(--shadow);
+}
+.btn-primary:hover {
+  background: #333;
+  box-shadow: 6px 6px 0 var(--accent);
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--border);
+  box-shadow: var(--shadow);
+}
+.btn-secondary:hover {
+  background: var(--bg);
+  box-shadow: 6px 6px 0 var(--accent);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--border);
+  box-shadow: none;
+  border-color: transparent;
+  font-size: 0.6rem;
+}
+.btn-ghost:hover { text-decoration: underline; }
+
+/* ── Screen Titles ────────────────────────────────────────────── */
+.screen-title {
+  font-size: clamp(1rem, 3vw, 1.6rem);
+  color: var(--border);
+  margin: 0 0 0.5rem;
+  letter-spacing: 3px;
+}
+.screen-sub {
+  font-size: 0.55rem;
+  color: #888;
+  margin: 0 0 2rem;
+  text-align: center;
+}
+
+/* ── Join Room ────────────────────────────────────────────────── */
+.code-input {
+  font-family: var(--pixel);
+  font-size: clamp(1.5rem, 6vw, 2.5rem);
+  width: 100%;
+  max-width: 260px;
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 12px;
+  padding: 0.75rem;
+  border: 3px solid var(--border);
+  background: var(--surface);
+  color: var(--border);
+  outline: none;
+  margin-bottom: 1.5rem;
+  box-shadow: var(--shadow);
+}
+.code-input:focus { box-shadow: 6px 6px 0 var(--accent); }
+
+.error-msg {
+  font-size: 0.55rem;
+  color: var(--accent);
+  margin-top: 0.75rem;
+  text-align: center;
+  min-height: 1.2em;
+}
+
+/* ── Lobby ────────────────────────────────────────────────────── */
+.room-code-display {
+  font-size: 0.6rem;
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+.code-badge {
+  background: var(--border);
+  color: #fff;
+  padding: 0.2em 0.5em;
+  letter-spacing: 4px;
+  font-size: 1.4em;
+}
+
+.player-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin: 1.5rem 0;
+  width: 100%;
+  max-width: 480px;
+}
+
+.player-slot {
+  width: 130px;
+  border: 3px solid var(--border);
+  padding: 0.75rem;
+  text-align: center;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  animation: slotIn 0.3s ease forwards;
+}
+@keyframes slotIn {
+  from { opacity: 0; transform: scale(0.8); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.player-slot .slot-color {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border);
+  margin: 0 auto 0.5rem;
+}
+.player-slot .slot-name {
+  font-size: 0.45rem;
+  color: var(--text);
+}
+.player-slot.empty {
+  border-style: dashed;
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+.waiting-msg { font-size: 0.5rem; color: #888; margin: 0.5rem 0; }
+
+/* ── Back Button (in-game) ────────────────────────────────────── */
+.back-btn {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  font-size: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 2px solid #aaa;
+  color: #aaa;
+}
+.back-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── Countdown Overlay ────────────────────────────────────────── */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(240,237,230,0.85);
+  z-index: 200;
+}
+.overlay.hidden { display: none; }
+
+.countdown-num {
+  font-size: clamp(5rem, 20vw, 10rem);
+  color: var(--border);
+  animation: countPop 0.7s ease forwards;
+}
+@keyframes countPop {
+  0%   { transform: scale(1.8); opacity: 0; }
+  40%  { transform: scale(1);   opacity: 1; }
+  80%  { transform: scale(1);   opacity: 1; }
+  100% { transform: scale(0.5); opacity: 0; }
+}
+
+/* ── GAME WORLD ───────────────────────────────────────────────── */
+.world {
+  overflow: hidden;
+  position: relative;
+  border: 3px solid var(--border);
+  box-shadow: var(--shadow);
+  background: #fff;
+}
+
+/* Solo score HUD */
+.score, .highscore, .separator {
+  position: absolute;
+  font-size: 2vmin;
+  color: var(--text);
+  top: 1vmin;
+  z-index: 10;
+}
+.score      { right: 1vmin; }
+.highscore  { right: 10vmin; }
+.separator  { right: 7vmin; }
+.high       { color: #aaa; margin-right: 4px; }
+
+.start-screen, .end-screen {
+  position: absolute;
+  font-size: 2vmin;
+  color: var(--text);
+  top: 50%;
   left: 50%;
-  top: 1%;
-  right: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  line-height: 2;
+  z-index: 10;
+}
+.restart-hint { font-size: 0.65em; color: #888; }
+
+/* Ground & Clouds */
+.ground {
+  --left: 0;
+  position: absolute;
+  width: 300%;
+  bottom: 0;
+  left: calc(var(--left) * 1%);
+}
+.clouds {
+  --left: 0;
+  top: 0;
+  position: absolute;
+  width: 150%;
+  left: calc(var(--left) * 1%);
+}
+
+/* Dino (solo) */
+.dino {
+  --bottom: 0;
+  position: absolute;
+  left: 1%;
+  height: 30%;
+  bottom: calc(var(--bottom) * 1%);
+  image-rendering: pixelated;
+  z-index: 5;
+}
+
+/* Cactus */
+.cactus {
+  position: absolute;
+  left: calc(var(--left) * 1%);
+  height: 30%;
+  bottom: 0;
+  image-rendering: pixelated;
+  z-index: 4;
+}
+
+/* ── Multiplayer Dinos ────────────────────────────────────────── */
+.mp-dino {
+  --bottom: 0;
+  position: absolute;
+  height: 30%;
+  bottom: calc(var(--bottom) * 1%);
+  image-rendering: pixelated;
+  z-index: 5;
+  transition: filter 0.1s;
+}
+
+.mp-dino.invincible {
+  animation: flash 0.25s step-end infinite;
+}
+@keyframes flash {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+/* ── MP HUD ───────────────────────────────────────────────────── */
+.mp-hud {
+  position: absolute;
+  top: 1vmin;
+  left: 1vmin;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4vmin;
+  z-index: 20;
+}
+.hud-player {
+  display: flex;
+  align-items: center;
+  gap: 0.5vmin;
+  font-size: 1.4vmin;
+  color: var(--text);
+}
+.hud-dot {
+  width: 1.2vmin;
+  height: 1.2vmin;
+  border-radius: 50%;
+  border: 1px solid #333;
+  flex-shrink: 0;
+}
+.hud-hearts { letter-spacing: 1px; }
+.hud-score  { margin-left: auto; padding-left: 1vmin; }
+
+.mp-score-global {
+  position: absolute;
+  top: 1vmin;
+  right: 1vmin;
+  font-size: 2vmin;
+  color: var(--text);
+  z-index: 20;
+}
+
+.mp-message {
+  position: absolute;
+  bottom: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 1.6vmin;
+  color: var(--text);
+  background: rgba(255,255,255,0.9);
+  padding: 0.5em 1em;
+  border: 2px solid var(--border);
+  z-index: 30;
+  text-align: center;
+  white-space: nowrap;
+}
+.mp-message.hidden { display: none; }
+
+/* Spawn animation overlays */
+.spawn-anim {
+  position: absolute;
+  z-index: 15;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+/* ── Game Over Screen ─────────────────────────────────────────── */
+.winner-box {
+  font-size: clamp(0.6rem, 2vw, 0.9rem);
+  color: var(--surface);
+  background: var(--border);
+  padding: 1rem 2rem;
+  border: 3px solid var(--border);
+  box-shadow: var(--shadow);
+  margin: 1rem 0;
+  text-align: center;
+  min-width: 260px;
+}
+
+.final-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0 2rem;
+  width: 100%;
+  max-width: 320px;
+}
+.final-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.55rem;
+  color: var(--text);
+  border: 2px solid var(--border);
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+}
+.final-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #333;
+  flex-shrink: 0;
+}
+.final-name { flex: 1; }
+.final-score { margin-left: auto; }
+
+/* ── Mobile responsive ────────────────────────────────────────── */
+@media (max-width: 500px) {
+  .game-title    { font-size: 1.8rem; }
+  .menu-buttons  { max-width: 280px; }
+  .player-slots  { gap: 0.5rem; }
+  .player-slot   { width: 110px; }
 }
