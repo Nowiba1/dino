@@ -7,14 +7,22 @@ import {
 const SPEED = 0.05
 const CACTUS_INTERVAL_MIN = 500
 const CACTUS_INTERVAL_MAX = 2000
-const worldElem = document.querySelector("[data-world]")
+
+// Active world context — switched between solo and multiplayer
+let activeWorld = null
 
 let nextCactusTime
-export function setupCactus() {
+
+/**
+ * setupCactus(worldElem?)
+ * Pass a worldElem to set context (e.g. multiWorld for MP host).
+ * Defaults to [data-world] (solo).
+ */
+export function setupCactus(worldElem) {
+  activeWorld    = worldElem || document.querySelector("[data-world]")
   nextCactusTime = CACTUS_INTERVAL_MIN
-  document.querySelectorAll("[data-cactus]").forEach(cactus => {
-    cactus.remove()
-  })
+  // Remove all existing cactus elements across the whole document
+  document.querySelectorAll("[data-cactus]").forEach(c => c.remove())
 }
 
 export function updateCactus(delta, speedScale) {
@@ -34,18 +42,19 @@ export function updateCactus(delta, speedScale) {
 }
 
 export function getCactusRects() {
-  return [...document.querySelectorAll("[data-cactus]")].map(cactus => {
-    return cactus.getBoundingClientRect()
-  })
+  return [...document.querySelectorAll("[data-cactus]")].map(cactus =>
+    cactus.getBoundingClientRect()
+  )
 }
 
 function createCactus() {
+  if (!activeWorld) return
   const cactus = document.createElement("img")
   cactus.dataset.cactus = true
   cactus.src = "images/cactus.png"
   cactus.classList.add("cactus")
   setCustomProperty(cactus, "--left", 100)
-  worldElem.append(cactus)
+  activeWorld.append(cactus)
 }
 
 function randomNumberBetween(min, max) {
